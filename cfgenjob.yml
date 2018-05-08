@@ -1,0 +1,64 @@
+---
+- hosts: localhost
+
+  tasks:
+  - name: include vars which are lost when import playbook
+    include_vars:
+      file: group_vars/all/vars
+    
+  - name: Get services
+    uri:
+      url: "{{ manageiq.api_url }}/api/services"
+      method: GET
+      return_content: yes
+      validate_certs: no
+      body_format: json
+      validate_certs: "{{ manageiq_validate_certs }}"
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+    register: service
+
+  - name: Create DRO entry
+    uri:
+      url: "{{ manageiq.api_url }}/api/generic_objects"
+      method: POST
+      validate_certs: no
+      body_format: json
+      validate_certs: "{{ manageiq_validate_certs }}"
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+      body:
+        action: create
+        name: "{{ poolname }}"
+        generic_object_definition:
+          href: "{{ manageiq.api_url }}/api/generic_object_definitions/1"
+        property_attributes:
+          poolname: "{{ poolname }}"
+          vip: "{{ vip }}"
+          node1: "{{ hostvars[groups['ec2_hosts'][0]]['private_dns_name'][0] }}"
+          node2: "{{ hostvars[groups['ec2_hosts'][1]]['private_dns_name'][0] }}"
+        associations:
+          vm:
+           - href: "https://192.168.2.46/api/vms/18"
+           - href: "https://192.168.2.46/api/vms/17" 
+          service:
+           - href: "{{ service.json.resources|last|json_query('href') }}"
+          provider: 
+           - href: https://localhost/api/providers/"{{ provider }}"
+      
+    register: dro
+
+  - name: add generic object to service
+    uri:
+      url: "{{ service.json.resources|last|json_query('href') }}"
+      method: POST
+      validate_certs: no
+      body_format: json
+      validate_certs: "{{ manageiq_validate_certs }}"
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+      body:
+        action: add_resource
+        resource:
+          resource:
+            href: "{{ dro.json.results[0].href }}"

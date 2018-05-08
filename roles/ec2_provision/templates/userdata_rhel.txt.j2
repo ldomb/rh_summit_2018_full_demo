@@ -1,0 +1,38 @@
+#cloud-config
+manage_etc_hosts: true
+
+groups:
+ - admin
+
+users:
+ - default
+
+ssh_authorized_keys:
+  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtBSfLiCMfuJxK+x1dq5YjBhdW74fl+xjIjksyyYfcE+mvBVerC/5OY3B+CJyfvDOtEOP7Vn4J9Ng2NA8J6eEZiYmLwi4E9xODTtQwJv7dKVOemlF7XU/nWJrgGkHBgd4mXs6qHRqGXigb7rS4upRNZ7ho2cJQzFM+INzUUYa0K5vBIXT5W7KZea09+sKc6MRvL4ZkMNP+rtqfyIAg9umJejReoQWfgQ+2hiYw+Ru+zMJE129iUkheJmUTyUP+EClCwxiqsmh5lt4qUzoASpepIdW0HhWZOVoDndtm947D3IUXiSBewIk1JLBEMH33XXVu7NNJiZg59v/it6iOv0Ol foreman-proxy@caps03.deployment6.lan
+  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCkbYrBOvoP9dTCRImXWA5JsMDPrFqqPtopsw243Y+Xv+gIJKNfYL7XHcI1h0vwE4qTkWEWIF/oHIddhTc+3XDiJ0vrAuOg5GkOka7LztpWXQcfylwlIh+qBv5sOS0R7O8j6BOaF25McTKOkoRQhyxIqJZmUJB7OswOpWvXX0BFu/MDw/lMmVjqa/qD6nslcwQ58s3pom2W0+2g5/STEHBS8m35fGiJGtg52MLl1AtmrPRNdmlkSZAKnWnuL7BPSfGbyy1VmBdMjBqvQdHFpw9uI/4T/nF1IUvDv3F8nhJB9iaaNnPZxLmb5i5PNvdKSEGZvzk/RO51qq7Rl3mPKDSn foreman-proxy@sat6cast.deployment6.lan
+  - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7byVkkq55T6bu5FWKkZdonxwdpKfkdmLd34Vo6w4rpXAgiyeGE1mYwcP8BgT84u1h406nlN0ynVDhdFzHFzksjhd4jH4iwd+GeMNWD2hlVdUjC8suxhQ4HDnviCy8/erBQIefFw3yiMHVEvKYvRne/Rckjp3lK56puGMsGB+i22WzmEGwlwuXh9WJjyhCsCyXUn+cxHPhjN9harfAoYAwWYKOtJJw6VyxDuhXoWvetCNbEBwQxj34isdQhe/2XdroazdAmFfHqU2MmxD2qNTceyTiK+PQWFjekAPIxD8OrrpNR7aIyQjrbCFIRYFR5QCotto8H7ak6WdjC+FgyVCl foreman-proxy@ip-10-0-1-51.ec2.internal
+
+write_files:
+- path: /tmp/foreman-userdata.sh
+  permissions: '0755'
+  content: |
+    #!/bin/bash
+
+    yum -y remove rh-amazon-rhui-client*
+    yum clean all
+    cat << EOF > /etc/yum/pluginconf.d/product-id.conf
+    [main]
+    enabled=1
+    EOF
+
+    # install latest consumer ca bundle from Satellite
+    curl http://ip-10-0-1-51.ec2.internal/pub/bootstrap.py -o /tmp/bootstrap.py
+
+    chmod +x /tmp/bootstrap.py
+
+    /tmp/bootstrap.py -s {{ satellite6 }} -l {{ satellite_reg_user }} -p {{ satellite_reg_password }} -a ak-dev-rhel7-jboss7 -o 'Summit Demo 2018' -L AWS -g RHEL7-Dev/JBOSSEAP
+
+
+runcmd:
+ - [ cloud-init-per, once, foreman-userdata, /tmp/foreman-userdata.sh ]
+output: {all: '| tee -a /root/install.userdata.log'}

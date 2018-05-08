@@ -1,0 +1,33 @@
+---
+dro_name: "f5"
+### privileged credentials needed for post provision tasks ###
+manageiq_user: admin
+# Run the following to generate your own vaulted password string and replace the contents of
+# manageiq_password. You will need to include a the vault password in your credentials
+# i.e. ansible-vault encrypt_string smartvm
+manageiq_password: YOURMANAGEIQPASS
+
+# turn ssl verify off
+manageiq_validate_certs: false
+
+# defaults file for ldomb-mysqlwin
+mariadb_root_password: YOURMARIADBPASS
+
+mariadb_app_password: YOURAPPPASS
+
+satellite_reg_user: SATELLITEUSER
+
+satellite_reg_password: SAT6PASS
+
+database: "ticketmonster"
+app_db_user: "ticketmonster"
+app_database: "ticketmonster"
+windows_db_user: "ticketmonster"
+
+bigip_username: "admin"
+
+bigip_password: F5PASS
+
+region: us-east-1
+
+sat_url: "Sat6URL"

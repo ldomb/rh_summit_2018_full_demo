@@ -1,0 +1,4 @@
+---
+# enable extra debugging
+verbose: false
+jar_download_url: http://Saturl/pub

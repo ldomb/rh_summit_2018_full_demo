@@ -1,0 +1,119 @@
+---
+- name: check connection
+  wait_for_connection:
+    timeout: 600
+  register: winrmcon
+
+- name: timeout in sec
+  debug: msg="{{ winrmcon }}"
+
+#### breaks if URL is not hardcoded #################
+- name: manageiq debug
+  debug: msg="{{ manageiq }}"
+- name: Find mariadb_win vms
+  uri:
+    url: "https://cloudforms1.redhat-demo.com/api/vms?expand=resources&attributes=href&filter[]=uid_ems={{item}}"
+    method: GET
+    validate_certs: no
+    body_format: json
+    validate_certs: false
+    user: "{{ hostvars['localhost']['manageiq_user'] }}"
+    password: "{{ hostvars['localhost']['manageiq_password'] }}"
+    status_code: 200
+  register: vm_href_win
+  with_items: "{{ hostvars['localhost']['instance_id_list_win'] }}"
+  delegate_to: localhost
+
+- name: get vm_href
+  debug: msg="{{ vm_href_win.results | map(attribute='json') |map(attribute='resources') | flatten | map(attribute='href') | list }}"
+  delegate_to: localhost
+
+- name: set fact hrefs
+  set_fact:
+    hrefs_win: "{{ vm_href_win.results | map(attribute='json') |map(attribute='resources') | flatten | map(attribute='href') | list }}"
+  delegate_to: localhost
+
+- name: Create DRO entry
+  uri:
+    url: "{{ manageiq.api_url }}/api/generic_objects"
+    method: POST
+    validate_certs: no
+    body_format: json
+    validate_certs: "{{ manageiq_validate_certs }}"
+    user: "{{ hostvars['localhost']['manageiq_user'] }}"
+    password: "{{ hostvars['localhost']['manageiq_password'] }}"
+    body: "{{ lookup('template','templates/bodydrowin.j2') | to_json }}"
+  register: drowin
+  delegate_to: localhost
+
+- name: add generic object to service
+  uri:
+    url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}"
+    method: POST
+    validate_certs: no
+    body_format: json
+    validate_certs: "{{ manageiq_validate_certs }}"
+    user: "{{ hostvars['localhost']['manageiq_user'] }}"
+    password: "{{ hostvars['localhost']['manageiq_password'] }}"
+    body:
+      action: add_resource
+      resource:
+        resource:
+          href: "{{ drowin.json.results[0].href }}"
+  delegate_to: localhost
+
+#### createdb
+- name: Install MariaDB on the Windows host
+  win_chocolatey:
+    name: mariadb
+    install_args: PASSWORD="{{ mariadb_root_password }}" ALLOWREMOTEROOTACCESS=yes UTF8=yes
+  tags:
+    - install
+
+- name: Set root password to something non-zero
+  mysql_user:
+    login_host: "{{ inventory_hostname }}"
+    login_user: root
+    name: root
+    password: "{{ mariadb_root_password }}"
+    state: present
+    host_all: yes
+    check_implicit_admin: yes
+  delegate_to: localhost
+
+- name: Create MariaDB database for Ticketmonster
+  mysql_db:
+    login_host: "{{ inventory_hostname }}"
+    login_password: "{{ mariadb_root_password }}"
+    login_user: root
+    name: "{{ database }}"
+    state: present
+  delegate_to: localhost
+  tags:
+    - dbconfig
+
+- name: Create MariaDB user for Ticketmonster
+  mysql_user:
+    login_host: "{{ inventory_hostname }}"
+    login_password: "{{ mariadb_root_password }}"
+    login_user: root
+    name: "{{ app_db_user }}"
+    password: "{{ mariadb_app_password }}"
+    state: present
+  delegate_to: localhost
+  tags:
+    - dbconfig
+
+- name: Setup privileges for Ticketmonster user
+  mysql_user:
+    login_host: "{{ inventory_hostname }}"
+    login_password: "{{ mariadb_root_password }}"
+    login_user: root
+    name: "{{ app_db_user }}"
+    password: "{{ mariadb_app_password }}"
+    state: present
+    priv: 'ticketmonster.*:ALL'
+    host: '%'
+  delegate_to: localhost
+  tags:
+    - dbconfig

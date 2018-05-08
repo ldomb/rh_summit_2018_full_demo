@@ -1,0 +1,167 @@
+---
+- name: include vars again
+  include_vars:
+    file: group_vars/all/vars
+
+- name: SSH into instance
+  shell: cat /etc/resolv.conf
+  register: ssh_output
+
+#- name: Log ssh_output
+#  debug:
+#    var: ssh_output
+
+# Add your own plays here
+
+#- name: Wait for SSH to start working
+#  wait_for_connection:
+
+#- setup:
+
+
+# modified puppet path wrong
+- name: Wait for registration to complete
+  wait_for:
+    path: /etc/puppetlabs/puppet/puppet.conf
+
+# part of initial activation
+#- name: Make sure the JBoss repo is enabled
+#  rhsm_repository:
+#    name: jb-eap-7.1-for-rhel-7-server-rpms
+#    state: enabled
+
+- name: Install JBoss on the RHEL host
+  yum: name=eap7-wildfly state=installed
+
+- name: Start JBoss service on the RHEL host
+  service: name=eap7-standalone state=running enabled=yes
+
+######## Add DRO
+- name: Create DRO entry
+  uri:
+    url: "{{ manageiq.api_url }}/api/generic_objects"
+    method: POST
+    validate_certs: no
+    body_format: json
+    validate_certs: "{{ manageiq_validate_certs }}"
+    user: "{{ manageiq_user }}"
+    password: "{{ manageiq_password }}"
+    body: "{{ lookup('template','templates/bodysingledrojboss.j2') | to_json }}"
+  register: drojboss
+
+- name: add generic object to service
+  uri:
+    url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}"
+    method: POST
+    validate_certs: no
+    body_format: json
+    validate_certs: "{{ manageiq_validate_certs }}"
+    user: "{{ manageiq_user }}"
+    password: "{{ manageiq_password }}"
+    body:
+      action: add_resource
+      resource:
+        resource:
+          href: "{{ drojboss.json.results[0].href }}"
+
+
+- name: Download app jar
+  get_url:
+    dest: /tmp/ticket-monster.war
+    url: "{{ jar_download_url }}/ticket-monster.war"
+
+- name: Download mariadb connector jar
+  get_url:
+    dest: /tmp/mariadb-java-client-2.2.3.jar
+    url: "{{ jar_download_url }}/mariadb-java-client-2.2.3.jar"
+
+- name: Create wrapper around jboss-cli from SCL
+  copy:
+    src: files/jboss-cli-wrapper.sh
+    dest: /usr/local/bin/jboss-cli-wrapper.sh
+    mode: 0755
+    group: root
+    owner: root
+
+- name: Add MariaDB module to JBoss
+  command: |
+    /usr/local/bin/jboss-cli-wrapper.sh --connect command="module add --name=org.mariadb.jdbc
+    --resources=/tmp/mariadb-java-client-2.2.3.jar
+    --dependencies=javax.api,javax.transaction.api,javax.servlet.api"
+  args:
+    creates: /opt/rh/eap7/root/usr/share/wildfly/modules/org/mariadb/jdbc/main/mariadb-java-client-2.2.3.jar
+
+- name: Register the MariaDB driver with JBoss
+  command: |
+    /usr/local/bin/jboss-cli-wrapper.sh --connect command="/subsystem=datasources/jdbc-driver=mariadb:add(driver-module-name=org.mariadb.jdbc,driver-name=mariadb,driver-xa-datasource-class-name=org.mariadb.jdbc.MySQLDataSource)"
+  args:
+    creates: /etc/mariadb_driver_created
+  register: driver_created
+
+- name: Create driver creation flag file
+  copy:
+    content: ""
+    dest: /etc/mariadb_driver_created
+    group: root
+    owner: root
+    mode: 0644
+  when: driver_created.rc == 0
+
+- name: Create driver creation flag file
+  copy:
+    content: ""
+    dest: /etc/mariadb_driver_created
+    group: root
+    owner: root
+    mode: 0644
+  when: driver_created.rc == 0
+
+- name: Create the datasource in JBoss EAP
+  command: |
+    /usr/local/bin/jboss-cli-wrapper.sh --connect command="/subsystem=datasources/data-source=MariaDS:add(jndi-name="java:jboss/datasources/TicketMonsterMariaDS",connection-url="jdbc:mariadb://{{groups['win'][0]}}:3306/{{ app_database }}",driver-name=mariadb,user-name={{ windows_db_user }},password={{ mariadb_app_password }},transaction-isolation=TRANSACTION_READ_COMMITTED,prepared-statements-cache-size=32,share-prepared-statements=true,min-pool-size=10,max-pool-size=100,pool-prefill=true)"
+  args:
+    creates: /etc/mariadb_ds_created
+  register: ds_created
+
+- name: Create datasource creation flag file
+  copy:
+    content: ""
+    dest: /etc/mariadb_ds_created
+    group: root
+    owner: root
+    mode: 0644
+  when: ds_created.rc == 0
+
+- name: Deploy jar
+  jboss:
+    deployment: ticketmonster.war
+    src: /tmp/ticket-monster.war
+    state: present
+    deploy_path: /opt/rh/eap7/root/usr/share/wildfly/standalone/deployments
+
+- name: Associate Satellite objects to AWS instances
+  uri:
+    method: PUT
+    password: "{{ satellite_reg_password }}"
+    user: "{{ satellite_reg_user }}"
+    url: https://satellite.redhat-demo.com/api/compute_resources/1/associate
+    validate_certs: false
+    force_basic_auth: yes
+    headers:
+      Content-Type: application/json
+  become: no
+  delegate_to: localhost
+  tags:
+    - assoc
+
+- name: run insights facts scan against hosts
+  uri:
+    url: https://tower.redhat-demo.com/api/v2/job_templates/13/launch/
+    method: POST
+    user: admin
+    password: "{{ manageiq_password }}"
+    validate_certs: false
+    status_code: 201
+    body:
+      limit: "{{ inventory_hostname }}"
+    body_format: json

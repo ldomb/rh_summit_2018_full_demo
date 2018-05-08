@@ -1,0 +1,198 @@
+---
+- name: Generate  UUID
+  shell: openssl rand -hex 2
+  register: uuid_list
+  with_sequence: start=1 end="{{ count }}"
+
+- name: Find current Windows AMI in this region
+  ec2_ami_find:
+    region: "{{ region }}"
+    platform: windows
+    virtualization_type: hvm
+    owner: amazon
+    name: Windows_Server-2012-R2_RTM-English-64Bit-Base-*
+    no_result_action: fail
+    sort: name
+    sort_order: descending
+  register: found_amis
+  when: win_ami_id is undefined
+
+- set_fact:
+    win_ami_id: "{{ (found_amis.results | first).ami_id  }}"
+  when: win_ami_id is undefined
+
+- debug:
+    msg: "Your Windows AMI id is {{ win_ami_id }}"
+
+
+- name: Ensure security group is present
+  ec2_group:
+    name: "rhtmgmt-winrm-rdp"
+    description: Inbound WinRM and RDP
+    region: "{{ region }}"
+    rules:
+      - proto: tcp
+        from_port: 80
+        to_port: 80
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 5986
+        to_port: 5986
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 3389
+        to_port: 3389
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 3306
+        to_port: 3306
+        cidr_ip: 0.0.0.0/0
+    purge_rules: false
+    rules_egress:
+      - proto: -1
+        cidr_ip: 0.0.0.0/0
+    purge_rules_egress: false
+    vpc_id: "{{ my_vpc_id }}"
+    tags:
+      Name: "rhtmgmt-winrm-rdp"
+  register: sg_out
+
+- debug: msg="{{sg_out}}"
+
+- name: Ensure instances are running
+  ec2_instance:
+    security_group: "{{ sg_out.group_id }}"
+    instance_type: "{{ instance_type }}"
+    image_id: "{{ win_ami_id }}"
+    vpc_subnet_id: "{{ vpc_subnet_id | random }}"
+    region: "{{ region }}"
+    name: "{{ vm_name }}-mariadb"
+    tags: "{{ instance_tags }}"
+    network:
+      assign_public_ip: "{{ assign_public_ip }}"
+    wait: yes
+    user_data: "{{ lookup('template', 'userdata_win2012.txt.j2') }}"
+  register: ec2_result
+
+- name: debug winvm
+  debug: var=ec2_result
+
+
+- debug:
+    msg:
+      - "Your Windows instance IP is {{ item.public_ip_address }}"
+      - "Starting WinRM detection at:"
+      - " {{ lookup('pipe', 'date') }}"
+      - "Time-out is 300 seconds from now."
+      - "this is the {{ item.instance_id }}"
+  with_items: "{{ ec2_result.instances }}"
+
+- name: win instance id
+  debug: msg="{{ ec2_result.instances |  map(attribute='instance_id' ) | list }}"
+
+- name: set fact for windows instance_id list
+  set_fact:
+    instance_id_list_win: "{{ ec2_result.instances | map(attribute='instance_id' ) | list }}"
+
+- name: Launch ec2 instances
+  ec2_instance:
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    key_name: "{{ key_name }}"
+    security_group: "{{ group_id }}"
+    instance_type: "{{ instance_type }}"
+    image_id: "{{ image }}"
+    vpc_subnet_id: "{{ vpc_subnet_id | random }}"
+    region: "{{ region }}"
+    name: "{{ vm_name }}-{{ item.stdout }}"
+    tags: "{{ instance_tags }}"
+    network:
+      assign_public_ip: "{{ assign_public_ip }}"
+    wait: "{{ wait }}"
+    user_data: "{{ lookup('template', 'userdata_rhel.txt.j2') }}"
+  register: ec2_created_vms
+  with_items: "{{ uuid_list.results }}"
+
+
+#- ec2_instance_facts:
+#  filters:
+#    instance-state-name: running
+#    tag:key:value
+#  register: result
+#  until: '(result.instances | length) == {{ count }}'
+#  retries: 10
+#  delay: 30
+
+
+################################################### DEBUG linux ##################################
+- name: debug ec2_created_vms
+  debug: var=ec2_created_vms
+
+- name: debug public_dns_name
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='public_dns_name') | list }}"
+
+- name: debug public_ip_address
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='public_ip_address') | list }}"
+
+- name: debug private_ip_address
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='private_ip_address') | list }}"
+
+- name: debug private_dns_name
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='private_dns_name') | list }}"
+
+- name: debug instance_id
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='instance_id') | list }}"
+
+- name: debug name
+  debug: msg="{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='tags.Name') | list }}"
+
+- name: set fact for public_dns_names
+  set_fact:
+    public_dns_names_list: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='public_dns_name') | list }}"
+
+- name: set fact for public_ip_addr
+  set_fact:
+    public_ip_addr_list: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='public_ip_address') | list }}"
+
+- name: set fact for private_ip_addr needed for F5
+  set_fact:
+    private_ip_addr_list: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='private_ip_address') | list }}"
+
+- name: set fact for instance_id list
+  set_fact:
+    instance_id_list: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='instance_id') | list }}"
+
+- name: get rhel names
+  set_fact:
+    rhel_names: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='tags.Name') | list }}"
+
+- name: set fact for private_dns_names
+  set_fact:
+    private_dns_name_list: "{{ ec2_created_vms.results | map(attribute='instances') | flatten | map(attribute='private_dns_name') | list }}"
+
+- name: merge instance_id_lists
+  set_fact:
+    instance_id_merged: "{{ instance_id_list + instance_id_list_win }}"
+
+- name: debug merged list
+  debug: msg="{{instance_id_merged}}"
+
+
+- name: adding linux ec2_instances to inventory
+  add_host:
+    name: "{{ item }}"
+    groups: ec2_hosts
+    manageiq: "{{ manageiq }}"
+  with_items: "{{ public_ip_addr_list }}"
+
+- name: Add windows hosts to groups
+  add_host:
+    name: "{{ item.public_dns_name }}"
+    ansible_port: 5986
+    ansible_connection: winrm
+    ansible_winrm_server_cert_validation: ignore 
+    ansible_user: "Administrator"
+    ansible_password: "{{ win_initial_password }}"
+    manageiq: "{{ manageiq }}"
+    groups: win
+  with_items: "{{ ec2_result.instances }}"

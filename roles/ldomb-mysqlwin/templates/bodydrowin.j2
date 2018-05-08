@@ -1,0 +1,20 @@
+{
+  "generic_object_definition": { "href": "https://cloudforms1.redhat-demo.com/api/generic_object_definitions/99000000000003"},
+  "name": "{{ database }}-jboss",
+  "property_attributes": {
+    "database": "{{ database }}",
+    "database_connection": "{{ inventory_hostname }}",
+    "database_user": "{{ app_db_user }}"
+  },
+  "associations": {
+   "service": [
+    { "href": "https://{{ manageiq.api_url }}/api/{{ manageiq.service }}" }
+   ],
+   "vm": [
+    {% for href in hrefs_win %}
+    { "href": "{{href}}" }{% if not loop.last %},
+      {% endif %}
+    {% endfor %}
+   ]
+  }
+}

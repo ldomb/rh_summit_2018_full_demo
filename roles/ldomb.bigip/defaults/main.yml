@@ -1,0 +1,10 @@
+---
+# defaults file for ldomb.bigip
+verbose: false
+
+hostname: "{{bigip_server}}"
+bigip_username: "admin"
+bigip_port: "8443"
+validate_certs: false
+poolname: "web"
+vip: "vip-1"

@@ -1,0 +1,4 @@
+---
+# defaults file for ldomb-mysqlwin
+database: "ticketmonster"
+app_db_user: "ticketmonster"

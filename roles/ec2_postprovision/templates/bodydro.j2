@@ -1,0 +1,22 @@
+{
+  "generic_object_definition": { "href": "https://cloudforms1.redhat-demo.com/api/generic_object_definitions/99000000000002"},
+  "name": "{{poolname}}",
+  "property_attributes": {
+    "vip": "{{ vip }}",
+    {% for privatedns in private_dns_name_list %}
+    "node{{loop.index}}": "{{ privatedns }}",
+    {% endfor %}
+    "bigipserver": "{{bigip_server}}"
+  },
+  "associations": {
+   "service": [
+    { "href": "https://{{ manageiq.api_url }}/api/{{ manageiq.service }}" }
+   ],
+   "vm": [
+    {% for href in hrefs %}
+    { "href": "{{href}}" }{% if not loop.last %},
+      {% endif %}
+    {% endfor %}
+   ]
+  }
+}

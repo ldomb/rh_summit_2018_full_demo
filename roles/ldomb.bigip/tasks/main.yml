@@ -1,0 +1,102 @@
+---
+- name: include vars again
+  include_vars:
+    file: group_vars/all/vars
+
+
+- name: get info from bigip
+  ec2_remote_facts:
+    region: "us-east-1"
+    filters:
+      ip-address: "{{ hostname }}"
+  register: instance
+
+- name: debug private ip
+  debug: msg="{{ instance.instances[0]['private_ip_address'] }}"
+
+- name: set fact for bigip private
+  set_fact:
+    bigprivate: "{{ instance.instances[0]['private_ip_address'] }}"
+
+# tasks file for ldomb.bigip
+- name: Create a pool
+  bigip_pool:
+      lb_method: "ratio-member"
+      name: "{{ poolname }}"
+      password: "{{ bigip_password }}"
+      server: "{{ hostname }}"
+      server_port: "{{ bigip_port }}"
+      slow_ramp_time: "120"
+      user: "{{ bigip_username }}"
+      validate_certs: "{{ validate_certs }}"
+  delegate_to: localhost
+
+- name: Create nodes
+  bigip_node:
+      host: "{{ item.0 }}"
+      name: "{{ item.1 }}"
+      password: "{{ bigip_password }}"
+      server: "{{ hostname }}"
+      server_port: "{{ bigip_port }}"
+      user: "{{ bigip_username }}"
+      validate_certs: "{{ validate_certs }}"
+  delegate_to: localhost
+  with_together: 
+    - "{{ private_ip_addr_list }}"
+    - "{{ private_dns_name_list }}"
+
+- name: Add custom attribute to service to retire later ### hardcoded because of string literal issue
+  uri:
+    url: "https://cloudforms1.redhat-demo.com/api/{{ manageiq.service }}/custom_attributes/"
+    method: POST
+    validate_certs: "{{ manageiq_validate_certs }}"
+    user: "{{ manageiq_user }}"
+    password: "{{ manageiq_password }}"
+    headers:
+      Accept: "application/json"
+    body_format: json
+    body:
+      action: add
+      resources:
+        - name: "{{ item.0 }}"
+          value: "{{ item.1 }}"
+  with_together: 
+    - "{{ private_dns_name_list }}"
+    - "{{ private_ip_addr_list }}"
+  delegate_to: localhost
+  
+
+- name: Add nodes to pool
+  bigip_pool_member:
+      description: "webserver-1"
+      host: "{{ item.0 }}"
+      name: "{{ item.1 }}"
+      password: "{{ bigip_password }}"
+      server_port: "{{ bigip_port }}"
+      pool: "{{ poolname }}"
+      port: "8080"
+      server: "{{ hostname }}"
+      user: "{{ bigip_username }}"
+      validate_certs: "{{ validate_certs }}"
+  delegate_to: localhost
+  with_together:
+    - "{{ private_ip_addr_list }}"
+    - "{{ private_dns_name_list }}"
+
+- name: Create a VIP
+  bigip_virtual_server:
+      description: "summit-vip"
+      destination: "{{ bigprivate }}"
+      password: "{{ bigip_password }}"
+      server_port: "{{ bigip_port }}"
+      name: "{{ vip }}"
+      pool: "{{ poolname }}"
+      port: "443"
+      server: "{{ hostname }}"
+      snat: "Automap"
+      user: "{{ bigip_username }}"
+      all_profiles:
+          - "http"
+          - "clientssl"
+      validate_certs: "{{ validate_certs }}"
+  delegate_to: localhost

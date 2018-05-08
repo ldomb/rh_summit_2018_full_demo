@@ -1,0 +1,202 @@
+---
+- name: Delete the service's generic objects
+  hosts: localhost
+
+  tasks:
+  - name: import vars
+    include_vars:
+      file: group_vars/all/vars
+ 
+  - name: Find the generic objects that belong to this service
+    uri:
+      url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}?attributes=generic_objects"
+      method: GET
+      validate_certs: no
+      body_format: json
+      validate_certs: false
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+    register: dro
+
+  - debug: msg="{{dro}}"
+
+
+  - name: get pool name of F5
+    debug: msg="{{ dro.json.options.dialog.dialog_param_poolname }}"
+
+  - name: get vip
+    debug: msg="{{ dro.json.options.dialog.dialog_param_vip }}"
+
+  - name: set fact for F5 pool
+    set_fact:
+      f5pool: "{{ dro.json.options.dialog.dialog_param_poolname }}"
+
+  - name: set fact for F5 pool
+    set_fact:
+      vip: "{{ dro.json.options.dialog.dialog_param_vip }}"
+
+  - name: Find the generic objects that belong to this service
+    uri:
+      url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}/custom_attributes?expand=resources"
+      method: GET
+      validate_certs: no
+      body_format: json
+      validate_certs: false
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+    register: cro
+
+  - name:
+    debug: msg="{{ cro.json.resources | map(attribute='name') | list }}"
+
+
+  - name: set fact nodes
+    set_fact:
+      f5nodes: "{{ cro.json.resources | map(attribute='name') | list }}"
+
+  - name: get the f5server
+    debug: msg="{{ dro.json.options.dialog.dialog_param_bigip_server }}"
+
+  - name: set fact for F5 server 
+    set_fact:
+      f5ip: "{{ dro.json.options.dialog.dialog_param_bigip_server }}"
+
+  - name: Destroy a VIP
+    bigip_virtual_server:
+      description: "{{ vip }}"
+      destination: "{{ f5ip }}"
+      password: "{{ bigip_password }}"
+      user: "{{ bigip_username }}"
+      name: "{{ vip }}"
+      pool: "{{ f5pool }}"
+      port: "8080"
+      server: "{{ f5ip }}"
+      server_port: "8443"
+      snat: "Automap"
+      state: "absent"
+      all_profiles:
+        - "http"
+        - "clientssl"
+      validate_certs: false 
+    delegate_to: localhost
+
+  - name: Destroy a pool
+    bigip_pool:
+      lb_method: "ratio-member"
+      name: "{{ f5pool }}"
+      password: "{{ bigip_password }}"
+      user: "{{ bigip_username }}"      
+      server: "{{ f5ip }}"
+      server_port: "8443"
+      slow_ramp_time: "120"
+      validate_certs: false 
+      state: "absent"
+    delegate_to: localhost
+
+  - name: delete nodes
+    bigip_node:
+      name: "{{ item }}"
+      password: "{{ bigip_password }}"
+      user: "{{ bigip_username }}"
+      server: "{{ f5ip }}"
+      server_port: "8443"
+      validate_certs: false 
+      state: "absent"
+    with_items: "{{ f5nodes }}"
+    delegate_to: localhost
+      
+
+  - name: Find the generic objects that belong to this service
+    uri:
+      url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}?attributes=generic_objects"
+      method: GET
+      validate_certs: no
+      body_format: json
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+    register: service
+    
+  - set_fact:
+      generic_objects: "{{ service.json.generic_objects }}"
+      
+  - name: Remove the resources from the service
+    uri:
+      url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}"
+      method: POST
+      validate_certs: no
+      body_format: json
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+
+      body:
+        action: remove_resource
+        resource:
+          resource:
+            href: "{{ item.href }}"
+    with_items: "{{ generic_objects }}"
+  
+  - name: Delete the generic objects
+    uri:
+      url: "{{ item.href }}"
+      method: POST
+      validate_certs: no
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+      body_format: json
+      body:
+        action: delete
+    with_items: "{{ generic_objects }}"
+
+  - name: Find the generic objects that belong to this service
+    uri:
+      url: "{{ manageiq.api_url }}/api/{{ manageiq.service }}/vms?expand=resources"
+      method: GET
+      validate_certs: no
+      body_format: json
+      user: "{{ manageiq_user }}"
+      password: "{{ manageiq_password }}"
+    register: vms
+
+  - name: debug instance ID
+    debug: msg="{{ vms.json.resources | map(attribute='ems_ref') | list }}"
+
+  - name: set fact instance id
+    set_fact:
+      instance_ids: "{{ vms.json.resources | map(attribute='ems_ref') | list }}"
+
+  - name: Terminate instances that were previously launched
+    ec2_instance:
+      region: "{{ region }}"
+      state: 'absent'
+      instance_ids: '{{ item }}'
+    with_items: "{{ instance_ids }}"
+    delegate_to: localhost
+
+  - name: Disassociate Satellite 6 host as they are already deleted by CFME
+    uri:
+      url: "https://{{ sat_url }}/api/v2/hosts/{{ item }}/disassociate"
+      method: PUT
+      validate_certs: false
+      user: "{{ satellite_reg_user }}"
+      password: "{{ satellite_reg_password }}"
+      force_basic_auth: yes
+      headers:
+        Content-Type: "application/json"
+      body_format: json
+    register: cra
+    with_items: "{{ f5nodes }}"
+
+  - name: Remove hosts from Satellite
+    uri:
+      url: "https://{{ sat_url }}/api/v2/hosts/{{ item }}"
+      method: DELETE
+      validate_certs: false
+      user: "{{ satellite_reg_user }}"
+      password: "{{ satellite_reg_password }}"
+      force_basic_auth: yes
+      headers:
+        Content-Type: "application/json"
+      body_format: json
+    register: cra
+    with_items: "{{ f5nodes }}"
+
